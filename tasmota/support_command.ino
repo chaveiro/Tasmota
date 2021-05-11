@@ -336,22 +336,23 @@ void CmndBacklog(void) {
 #endif
     {
       // Ignore semicolon (; = end of single command) between brackets {}
-      char *next = strchr(blcommand, '\0') +1;        // Prepare for next ;
-      while ((next != nullptr) && (ChrCount(blcommand, "{") != ChrCount(blcommand, "}"))) {  // Check for valid {} count
-        next--;                                       // Select end of line
-        *next = ';';                                  // Restore ; removed by strtok()
-        next = strtok(nullptr, ";");                  // Point to begin of next string up to next ; or nullptr
+      char *next = strchr(blcommand, '\0') +1;  // Prepare for next ;
+      while ((next != nullptr) && (ChrCount(blcommand, "{") != ChrCount(blcommand, "}"))) {  // Check for valid {} pair
+        next--;                                 // Select end of line
+        *next = ';';                            // Restore ; removed by strtok()
+        next = strtok(nullptr, ";");            // Point to begin of next string up to next ; or nullptr
       }
       // Skip unnecessary command Backlog at start of blcommand
       while(true) {
         blcommand = Trim(blcommand);
-        if (!strncasecmp_P(blcommand, PSTR(D_CMND_BACKLOG), strlen(D_CMND_BACKLOG))) {
+        if (0 == strncasecmp_P(blcommand, PSTR(D_CMND_BACKLOG), strlen(D_CMND_BACKLOG))) {
           blcommand += strlen(D_CMND_BACKLOG);
         } else {
           break;
         }
       }
-      if (*blcommand != '\0') {
+      // Do not allow command Reset in backlog
+      if ((*blcommand != '\0') && (strncasecmp_P(blcommand, PSTR(D_CMND_RESET), strlen(D_CMND_RESET)) != 0))  {
 #ifdef SUPPORT_IF_STATEMENT
         if (backlog.size() < MAX_BACKLOG) {
           backlog.add(blcommand);
@@ -1856,10 +1857,11 @@ void CmndTeleperiod(void)
 {
   if ((XdrvMailbox.payload >= 0) && (XdrvMailbox.payload < 3601)) {
     Settings.tele_period = (1 == XdrvMailbox.payload) ? TELE_PERIOD : XdrvMailbox.payload;
-    if ((Settings.tele_period > 0) && (Settings.tele_period < 10)) Settings.tele_period = 10;   // Do not allow periods < 10 seconds
-//    TasmotaGlobal.tele_period = Settings.tele_period;
+    if ((Settings.tele_period > 0) && (Settings.tele_period < 10)) {
+      Settings.tele_period = 10;   // Do not allow periods < 10 seconds
+    }
   }
-  TasmotaGlobal.tele_period = Settings.tele_period;        // Show teleperiod data also on empty command
+  TasmotaGlobal.tele_period = (Settings.tele_period) ? Settings.tele_period : 3601;  // Show teleperiod data also on empty command
   ResponseCmndNumber(Settings.tele_period);
 }
 

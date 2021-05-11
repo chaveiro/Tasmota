@@ -463,12 +463,15 @@
 #define USE_RULES                                // Add support for rules (+8k code)
 //  #define USE_EXPRESSION                         // Add support for expression evaluation in rules (+3k2 code, +64 bytes mem)
 //    #define SUPPORT_IF_STATEMENT                 // Add support for IF statement in rules (+4k2 code, -332 bytes mem)
+//  #define USER_RULE1 "<Any rule1 data>"          // Add rule1 data saved at initial firmware load or when command reset is executed
+//  #define USER_RULE2 "<Any rule2 data>"          // Add rule2 data saved at initial firmware load or when command reset is executed
+//  #define USER_RULE3 "<Any rule3 data>"          // Add rule3 data saved at initial firmware load or when command reset is executed
 
 //#define USE_SCRIPT                               // Add support for script (+17k code)
-  //#define USE_SCRIPT_FATFS 4                     // Script: Add FAT FileSystem Support
-
+//  #define USE_SCRIPT_FATFS 4                     // Script: Add FAT FileSystem Support
 //  #define SUPPORT_MQTT_EVENT                     // Support trigger event with MQTT subscriptions (+3k5 code)
 
+//#define USER_BACKLOG "<Any command separated by a semicolon (;)>"  // Add commands executed at firmware load or when command reset is executed
 
 // -- Optional modules ----------------------------
 #define ROTARY_V1                                // Add support for Rotary Encoder as used in MI Desk Lamp (+0k8 code)
@@ -685,8 +688,9 @@
 //#define USE_DYP                                  // Add support for DYP ME-007 ultrasonic distance sensor, serial port version (+0k5 code)
 #define USE_SERIAL_BRIDGE                        // Add support for software Serial Bridge (+0k8 code)
 //#define USE_TCP_BRIDGE                           //  Add support for Serial to TCP bridge (+1.3k code)
-//#define USE_MP3_PLAYER                           // Use of the DFPlayer Mini MP3 Player RB-DFR-562 commands: play, volume and stop
+//#define USE_MP3_PLAYER                           // Use of the DFPlayer Mini MP3 Player RB-DFR-562 commands: play, pause, stop, track, volume and reset
   #define MP3_VOLUME           10                // Set the startup volume on init, the range can be 0..30(max)
+//  #define USE_DY_SV17F                             // Use of DY-SV17F MP3 Player commands: play, stop, track and volume
 //#define USE_AZ7798                               // Add support for AZ-Instrument 7798 CO2 datalogger (+1k6 code)
 //#define USE_PN532_HSU                            // Add support for PN532 using HSU (Serial) interface (+1k8 code, 140 bytes mem)
 //  #define USE_PN532_DATA_FUNCTION                // Add sensor40 command support for erase, setting data block content (+1k7 code, 388 bytes mem)
@@ -918,6 +922,8 @@
 
 // -- LVGL Graphics Library ---------------------------------
 //#define USE_LVGL                                  // LVGL Engine, requires Berry, takes 440k of Flash
+  #define USE_LVGL_PSRAM                            // Allocate LVGL memory in PSRAM if PSRAM is connected - this might be slightly slower but leaves main memory intact
+  #define USE_LVGL_MAX_SLEEP  10                    // max sleep in ms when LVGL is enabled, more than 10ms will make display less responsive
   #define USE_LVGL_BG_DEFAULT 0x000000              // Default color for the uninitialized background screen (black)
 
 

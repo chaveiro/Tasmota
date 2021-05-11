@@ -69,6 +69,7 @@ uDisplay::uDisplay(char *lp) : Renderer(800, 600) {
   fg_col = 1;
   bg_col = 0;
   splash_font = -1;
+  rotmap_xmin = -1;
   allcmd_mode = 0;
   startline = 0xA1;
   uint8_t section = 0;
@@ -122,7 +123,8 @@ uDisplay::uDisplay(char *lp) : Renderer(800, 600) {
             setwidth(gxs);
             gys = next_val(&lp1);
             setheight(gys);
-            bpp = next_val(&lp1);
+            disp_bpp = next_val(&lp1);
+            bpp = abs(disp_bpp);
             if (bpp == 1) {
               col_type = uCOLOR_BW;
             } else {
@@ -287,7 +289,13 @@ uDisplay::uDisplay(char *lp) : Renderer(800, 600) {
             break;
           case 'B':
             lvgl_param.fluslines = next_val(&lp1);
-            lvgl_param.use_dma = next_val(&lp1);
+            lvgl_param.data = next_val(&lp1);
+            break;
+          case 'M':
+            rotmap_xmin = next_val(&lp1);
+            rotmap_xmax = next_val(&lp1);
+            rotmap_ymin = next_val(&lp1);
+            rotmap_ymax = next_val(&lp1);
             break;
         }
       }
@@ -373,15 +381,7 @@ uDisplay::uDisplay(char *lp) : Renderer(800, 600) {
 
 Renderer *uDisplay::Init(void) {
 
-  if (reset >= 0) {
-    pinMode(reset, OUTPUT);
-    digitalWrite(reset, HIGH);
-    delay(50);
-    digitalWrite(reset, LOW);
-    delay(50);
-    digitalWrite(reset, HIGH);
-    delay(200);
-  }
+
 
   if (interface == _UDSP_I2C) {
     if (wire_n == 0) {
@@ -485,6 +485,16 @@ Renderer *uDisplay::Init(void) {
       digitalWrite(spi_mosi, LOW);
     }
 #endif // ESP32
+
+    if (reset >= 0) {
+      pinMode(reset, OUTPUT);
+      digitalWrite(reset, HIGH);
+      delay(50);
+      digitalWrite(reset, LOW);
+      delay(50);
+      digitalWrite(reset, HIGH);
+      delay(200);
+    }
 
     spiSettings = SPISettings((uint32_t)spi_speed*1000000, MSBFIRST, SPI_MODE3);
 
@@ -946,6 +956,9 @@ for(y=h; y>0; y--) {
 
 
 void uDisplay::Splash(void) {
+
+  if (splash_font < 0) return;
+
   if (ep_mode) {
     Updateframe();
     delay(lut3time * 10);
@@ -1033,58 +1046,137 @@ void uDisplay::setAddrWindow_int(uint16_t x, uint16_t y, uint16_t w, uint16_t h)
 }
 
 
+#define CNV_B1_OR  ((0x10<<11) | (0x20<<5) | 0x10)
 static inline uint8_t ulv_color_to1(uint16_t color) {
-  if (((color>>11) & 0x10) || ((color>>5) & 0x20) || (color & 0x10)) {
+  if (color & CNV_B1_OR) {
       return 1;
   }
   else {
       return 0;
   }
+/*
+// this needs optimization
+  if (((color>>11) & 0x10) || ((color>>5) & 0x20) || (color & 0x10)) {
+      return 1;
+  }
+  else {
+      return 0;
+  }*/
 }
-void uDisplay::pushColors(uint16_t *data, uint16_t len, boolean not_inverted) {
+
+// convert to mono, these are framebuffer based
+void uDisplay::pushColorsMono(uint16_t *data, uint16_t len) {
+  for (uint32_t y = seta_yp1; y < seta_yp2; y++) {
+    for (uint32_t x = seta_xp1; x < seta_xp2; x++) {
+      uint16_t color = *data++;
+      if (bpp == 1) color = ulv_color_to1(color);
+      drawPixel(x, y, color);
+      len--;
+      if (!len) return;
+    }
+  }
+}
+
+// swap high low byte
+static inline void lvgl_color_swap(uint16_t *data, uint16_t len) { for (uint32_t i = 0; i < len; i++) (data[i] = data[i] << 8 | data[i] >> 8); }
+
+void uDisplay::pushColors(uint16_t *data, uint16_t len, boolean not_swapped) {
   uint16_t color;
 
-  //Serial.printf("push %x - %d\n", (uint32_t)data, len);
+  if (lvgl_param.swap_color) {
+    not_swapped = !not_swapped;
+  }
+
+  //Serial.printf("push %x - %d - %d - %d\n", (uint32_t)data, len, not_swapped,lvgl_param.data);
+  if (not_swapped == false) {
+    // called from LVGL bytes are swapped
+    if (bpp != 16) {
+      lvgl_color_swap(data, len);
+      pushColorsMono(data, len);
+      return;
+    }
+
+    if ( (col_mode != 18) && (spi_dc >= 0) && (spi_nr <= 2) ) {
+      // special version 8 bit spi I or II
+#ifdef ESP8266
+      lvgl_color_swap(data, len);
+      while (len--) {
+        uspi->write(*data++);
+      }
+#else
+      if (lvgl_param.use_dma) {
+        pushPixelsDMA(data, len );
+      } else {
+        uspi->writeBytes((uint8_t*)data, len * 2);
+      }
+#endif
+    } else {
 
 #ifdef ESP32
-// reversed order for DMA, so non-DMA needs to get back to normal order
-  if (!not_inverted && !lvgl_param.use_dma) {
-    for (uint32_t i = 0; i < len; i++) (data[i] = data[i] << 8 | data[i] >> 8);
-  }
-#endif
+      if ( (col_mode == 18) && (spi_dc >= 0) && (spi_nr <= 2) ) {
+        uint8_t *line = (uint8_t*)malloc(len * 3);
+        uint8_t *lp = line;
+        if (line) {
+          for (uint32_t cnt = 0; cnt < len; cnt++) {
+            color = *data++;
+            color = (color << 8) | (color >> 8);
+            uint8_t r = (color & 0xF800) >> 11;
+            uint8_t g = (color & 0x07E0) >> 5;
+            uint8_t b = color & 0x001F;
+            r = (r * 255) / 31;
+            g = (g * 255) / 63;
+            b = (b * 255) / 31;
+            *lp++ = r;
+            *lp++ = g;
+            *lp++ = b;
+          }
 
-  if (bpp != 16) {
-    // stupid monchrome version
-    for (uint32_t y = seta_yp1; y < seta_yp2; y++) {
-      for (uint32_t x = seta_xp1; x < seta_xp2; x++) {
-        uint16_t color = *data++;
-        drawPixel(x, y, ulv_color_to1(color));
-        len--;
-        if (!len) return;
+          if (lvgl_param.use_dma) {
+            pushPixels3DMA(line, len );
+          } else {
+            uspi->writeBytes(line, len * 3);
+          }
+          free(line);
+        }
+
+      } else {
+        // 9 bit and others
+        lvgl_color_swap(data, len);
+        while (len--) {
+          WriteColor(*data++);
+        }
+      }
+#endif // ESP32
+
+#ifdef ESP8266
+      lvgl_color_swap(data, len);
+      while (len--) {
+        WriteColor(*data++);
+      }
+#endif
+    }
+  } else {
+    // called from displaytext, no byte swap, currently no dma here
+    if (bpp != 16) {
+      pushColorsMono(data, len);
+      return;
+    }
+    if ( (col_mode != 18) && (spi_dc >= 0) && (spi_nr <= 2) ) {
+      // special version 8 bit spi I or II
+  #ifdef ESP8266
+      while (len--) {
+        uspi->write(*data++);
+      }
+  #else
+      uspi->writePixels(data, len * 2);
+  #endif
+    } else {
+      // 9 bit and others
+      while (len--) {
+        WriteColor(*data++);
       }
     }
-    return;
   }
-
-  if ( (col_mode != 18) && (spi_dc >= 0) && (spi_nr <= 2) ) {
-    // special version 8 bit spi I or II
-#ifdef ESP8266
-    while (len--) {
-      uspi->write(*data++);
-    }
-#else
-    if (lvgl_param.use_dma) {
-      pushPixelsDMA(data, len );
-    } else {
-      uspi->writePixels(data, len * 2);
-    }
-#endif
-  } else {
-    while (len--) {
-      WriteColor(*data++);
-    }
-  }
-
 }
 
 void uDisplay::WriteColor(uint16_t color) {
@@ -1291,8 +1383,17 @@ void uDisplay::dim(uint8_t dim) {
 }
 
 
+// the cases are PSEUDO_OPCODES from MODULE_DESCRIPTOR
+// and may be exapnded with more opcodes
 void uDisplay::TS_RotConvert(int16_t *x, int16_t *y) {
   int16_t temp;
+
+  if (rotmap_xmin >= 0) {
+    *y = map(*y, rotmap_ymin, rotmap_ymax, 0, gys);
+    *x = map(*x, rotmap_xmin, rotmap_xmax, 0, gxs);
+  }
+  *x = constrain(*x, 0, gxs);
+  *y = constrain(*y, 0, gys);
 
   switch (rot_t[cur_rot]) {
     case 0:
@@ -1942,6 +2043,32 @@ void uDisplay::pushPixelsDMA(uint16_t* image, uint32_t len) {
   trans.user = (void *)1;
   trans.tx_buffer = image;  //finally send the line data
   trans.length = len * 16;        //Data length, in bits
+  trans.flags = 0;                //SPI_TRANS_USE_TXDATA flag
+
+  ret = spi_device_queue_trans(dmaHAL, &trans, portMAX_DELAY);
+  assert(ret == ESP_OK);
+
+  spiBusyCheck++;
+}
+
+/***************************************************************************************
+** Function name:           pushPixelsDMA
+** Description:             Push pixels to TFT (len must be less than 32767)
+***************************************************************************************/
+// This will byte swap the original image if setSwapBytes(true) was called by sketch.
+void uDisplay::pushPixels3DMA(uint8_t* image, uint32_t len) {
+
+  if ((len == 0) || (!DMA_Enabled)) return;
+
+  dmaWait();
+
+  esp_err_t ret;
+
+  memset(&trans, 0, sizeof(spi_transaction_t));
+
+  trans.user = (void *)1;
+  trans.tx_buffer = image;  //finally send the line data
+  trans.length = len * 24;        //Data length, in bits
   trans.flags = 0;                //SPI_TRANS_USE_TXDATA flag
 
   ret = spi_device_queue_trans(dmaHAL, &trans, portMAX_DELAY);
